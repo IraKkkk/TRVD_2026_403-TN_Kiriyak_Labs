@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AssetHub — Твоє сховище асетів</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; }
+        .navbar-brand { font-weight: bold; color: #0d6efd; }
+        .upload-card { border-radius: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    </style>
+</head>
+<body>
+
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+        <div class="container">
+            <a class="navbar-brand" href="#">AssetHub</a>
+            <div class="navbar-nav ms-auto">
+                <a class="nav-link active" href="#">Головна</a>
+                <a class="nav-link" href="#">Мій профіль</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-md-6">
+                <div class="card upload-card p-4">
+                    <h2 class="text-center mb-4">Додати новий асет</h2>
+                    
+                    <form action="/upload" method="post" enctype="multipart/form-data">
+                        <div class="mb-3">
+                            <label class="form-label">Оберіть файл асета</label>
+                            <input class="form-control" type="file" name="asset_file" required>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Категорія</label>
+                            <select class="form-select" name="category">
+                                {% for cat in categories %}
+                                    <option value="{{ cat }}">{{ cat }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="d-grid">
+                            <button type="submit" class="btn btn-primary btn-lg">Опублікувати</button>
+                        </div>
+                    </form>
+                </div>
+                
+                <p class="text-center text-muted mt-3">
+                    <small>Ви можете завантажувати 2D, 3D моделі, звуки та інше.</small>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
