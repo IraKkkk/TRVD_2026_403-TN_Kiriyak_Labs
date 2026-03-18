@@ -1,133 +1,102 @@
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
-from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime
+import jwt
+import datetime
+import re
 import os
+from functools import wraps
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static')
+CORS(app)
 
 # --- КОНФІГУРАЦІЯ ---
-app.config['SECRET_KEY'] = 'your-secret-key-123' # Потрібно для роботи сесій
+app.config['SECRET_KEY'] = 'university-ahub-secure-key'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///assets.db'
-app.config['UPLOAD_FOLDER'] = 'uploads'
 
 db = SQLAlchemy(app)
-login_manager = LoginManager(app)
-login_manager.login_view = 'login' # Куди перенаправляти неавторизованих
 
-# ---------------------------------------------------------
-# 1. ШАР ДОСТУПУ ДО ДАНИХ (MODELS)
-# ---------------------------------------------------------
-
-class User(UserMixin, db.Model):
+# --- МОДЕЛІ ---
+class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
+    username = db.Column(db.String(80), unique=True, nullable=False) # Email або Login
     password_hash = db.Column(db.String(128))
+    role = db.Column(db.String(20), default='Student') # Ролі: Student, Admin
     assets = db.relationship('Asset', backref='owner', lazy=True)
 
 class Asset(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     filename = db.Column(db.String(100), nullable=False)
-    category = db.Column(db.String(50), nullable=False)
-    upload_date = db.Column(db.DateTime, default=datetime.utcnow)
+    category = db.Column(db.String(50), default='Document') # Document, Source Code, Model
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
 
-@login_manager.user_loader
-def load_user(user_id):
-    return User.query.get(int(user_id))
+# --- ВАЛІДАЦІЯ ПАРОЛЯ (Security Requirement) ---
+def is_password_strong(password):
+    if len(password) < 8: return False
+    if not re.search("[a-z]", password): return False
+    if not re.search("[A-Z]", password): return False
+    if not re.search("[0-9]", password): return False
+    if not re.search("[!@#$%^&*]", password): return False
+    return True
 
-# ---------------------------------------------------------
-# 2. DTO (Data Transfer Objects)
-# ---------------------------------------------------------
+# --- MIDDLEWARE (JWT Verification) ---
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.headers.get('Authorization')
+        if not token:
+            return jsonify({'message': 'Токен відсутній!'}), 401
+        try:
+            token_clean = token.split(" ")[1]
+            data = jwt.decode(token_clean, app.config['SECRET_KEY'], algorithms=['HS256'])
+            current_user = User.query.get(data['user_id'])
+        except:
+            return jsonify({'message': 'Сесія закінчилася, увійдіть знову'}), 401
+        return f(current_user, *args, **kwargs)
+    return decorated
 
-class AssetDTO:
-    def __init__(self, asset):
-        self.id = asset.id
-        self.name = asset.filename
-        self.category = asset.category
-        self.date = asset.upload_date.strftime("%Y-%m-%d %H:%M")
+# --- API ЕНДПОІНТИ ---
+@app.route('/api/register', methods=['POST'])
+def register():
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
 
-# ---------------------------------------------------------
-# 3. СЕРВІСНИЙ ШАР (BUSINESS LOGIC)
-# ---------------------------------------------------------
+    if not is_password_strong(password):
+        return jsonify({'message': 'Пароль занадто слабкий! Мінімум 8 символів, цифра та спецсимвол.'}), 400
 
-class AuthService:
-    @staticmethod
-    def register(username, password):
-        if User.query.filter_by(username=username).first():
-            return False
-        hashed_pw = generate_password_hash(password)
-        new_user = User(username=username, password_hash=hashed_pw)
-        db.session.add(new_user)
-        db.session.commit()
-        return True
+    if User.query.filter_by(username=username).first():
+        return jsonify({'message': 'Користувач вже існує'}), 400
 
-    @staticmethod
-    def login(username, password):
-        user = User.query.filter_by(username=username).first()
-        if user and check_password_hash(user.password_hash, password):
-            login_user(user)
-            return True
-        return False
+    hashed_pw = generate_password_hash(password)
+    new_user = User(username=username, password_hash=hashed_pw)
+    db.session.add(new_user)
+    db.session.commit()
+    return jsonify({'message': 'Реєстрація успішна! Ви можете увійти.'}), 201
 
-class AssetService:
-    @staticmethod
-    def get_user_assets(user_id):
-        assets = Asset.query.filter_by(user_id=user_id).all()
-        return [AssetDTO(a) for a in assets]
+@app.route('/api/login', methods=['POST'])
+def login():
+    data = request.json
+    user = User.query.filter_by(username=data.get('username')).first()
+    if user and check_password_hash(user.password_hash, data.get('password')):
+        token = jwt.encode({
+            'user_id': user.id,
+            'exp': datetime.datetime.utcnow() + datetime.timedelta(minutes=60)
+        }, app.config['SECRET_KEY'], algorithm='HS256')
+        return jsonify({'token': token})
+    return jsonify({'message': 'Невірні облікові дані'}), 401
 
-    @staticmethod
-    def save_new_asset(file, category, user_id):
-        if file and category:
-            filename = file.filename
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            new_asset = Asset(filename=filename, category=category, user_id=user_id)
-            db.session.add(new_asset)
-            db.session.commit()
-            return AssetDTO(new_asset)
-        return None
-
-# ---------------------------------------------------------
-# 4. КОНТРОЛЕРИ (ROUTES)
-# ---------------------------------------------------------
+@app.route('/api/my-assets', methods=['GET'])
+@token_required
+def get_assets(current_user):
+    assets = [{"id": a.id, "name": a.filename, "cat": a.category} for a in current_user.assets]
+    return jsonify({'assets': assets, 'user': current_user.username})
 
 @app.route('/')
-@login_required # Тепер головна сторінка тільки для залогінених
 def index():
-    categories = ['2D Model', '3D Model', 'Sounds', 'Animations', 'Textures']
-    assets = AssetService.get_user_assets(user_id=current_user.id)
-    return render_template('index.html', categories=categories, assets=assets, user=current_user)
+    return send_from_directory(app.static_folder, 'index.html')
 
-@app.route('/register', methods=['GET', 'POST'])
-def register():
-    if request.method == 'POST':
-        if AuthService.register(request.form.get('username'), request.form.get('password')):
-            return redirect(url_for('login'))
-    return render_template('register.html')
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        if AuthService.login(request.form.get('username'), request.form.get('password')):
-            return redirect(url_for('index'))
-    return render_template('login.html')
-
-@app.route('/logout')
-@login_required
-def logout():
-    logout_user()
-    return redirect(url_for('login'))
-
-@app.route('/upload', methods=['POST'])
-@login_required
-def upload():
-    file = request.files.get('asset_file')
-    category = request.form.get('category')
-    result = AssetService.save_new_asset(file, category, current_user.id)
-    return redirect(url_for('index'))
-
-# Створення бази
 with app.app_context():
     db.create_all()
 
